@@ -297,6 +297,10 @@ end
 # given a reference point, pick a random point within a given radius
 function pickPointOnSphere(x_orig::Array{Float64},radius::Float64)
 
+	if(radius < 1E-09)
+		error("Sampling radius in pickPointOnSphere is almost zero! Set manually.")
+	end
+
 	n::Int64 = size(x_orig,1)
 	unifRand = rand(1)
 	factor1::Float64 = radius*(unifRand[1])^(1.0/n)
