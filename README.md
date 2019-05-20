@@ -1,5 +1,6 @@
 # SA-for-CCP
-Julia codes for the paper "A stochastic approximation method for chance-constrained nonlinear programs"
+Julia codes for the paper "A stochastic approximation method for chance-constrained nonlinear programs". Results in the paper were generated using Julia 0.6.2, JuMP 0.18.2, Gurobi 7.5.2, IPOPT 3.12.8 (with
+MUMPS as the linear solver), and SCIP 6.0.0.
 
 Stochastic approximation: Run stochapprox_template.jl after changing the "model" entry in this file. 
 The folders for the examples "normopt_noniid" and "resource" contain files to obtain a better estimate of the risk levels at the final solutions returned by this method.
@@ -9,4 +10,4 @@ The folder for example "normopt_noniid" contains code to obtain a better estimat
 
 Sigmoidal approximation: Run sigapprox_template.jl.
 
-Note: Make sure to change the output directory in all of the above files.
+Note: Make sure to change the working directory in all of the above files.
