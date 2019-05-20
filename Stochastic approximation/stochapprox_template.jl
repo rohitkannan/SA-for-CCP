@@ -1,6 +1,6 @@
 
 #*========= MODEL INFORMATION ==========
-const model = "normopt"
+const model = "portfolio"
 
 # number of replicates of the overall algorithm
 const numTrials = 10
@@ -224,6 +224,10 @@ end
 
 
 objIterCount::Int64 = 0
+
+if(abs(objGap) < 1E-09)
+	error("Objective spacing for EF is almost zero! Reset manually.")
+end
 
 
 while true
