@@ -1,9 +1,14 @@
-using Distributions, StatsFuns, StatsBase
+using JuMP, Gurobi, Distributions, StatsFuns, StatsBase
 
-include("portfolio_initialization_template.jl")
+include("portfolio_var_initialization_template.jl")
 
-const numVariables = 1000 + 1
-const numAssets = numVariables-1
+
+const gurobi_env = Gurobi.Env()
+
+const numVariables = 1000
+const numAssets = numVariables
+
+const returnLBD = 1.2 #lower bound on the return
 
 #*============ MODEL PARAMETERS ================
 const mean = Array{Float64}(numAssets)
@@ -23,7 +28,7 @@ end
 # compute probability that constraints aren't satisfied
 function computeRiskLevel(y_opt::Array{Float64})
 
-	riskLevel::Float64 = 1.0 - normcdf((sum(mean[i]*y_opt[i] for i = 1:numAssets) - y_opt[numAssets+1])/norm(sigma*(y_opt[1:numAssets])))
+	riskLevel::Float64 = 1.0 - normcdf((sum(mean[i]*y_opt[i] for i = 1:numAssets) - returnLBD)/norm(sigma*y_opt))
 	
 	return riskLevel
 end
@@ -41,7 +46,7 @@ end
 # realization of the random variables xi, and constraint scalings
 function evaluateConstraint(x::Array{Float64},xi::Array{Float64},scalings::Float64)
 
-	con::Float64 = (x[numVariables] - xi'*x[1:numVariables-1])/scalings
+	con::Float64 = (returnLBD - xi'*x)/scalings
 
 	return con
 end
@@ -58,10 +63,9 @@ end
 function evaluateConstraintGradients(x::Array{Float64},xi::Array{Float64},scalings::Float64)
 
 	grad_con = zeros(Float64,numVariables)
-	for j = 1:numVariables-1
+	for j = 1:numVariables
 		grad_con[j] = -xi[j]
 	end
-	grad_con[numVariables] = 1
 	grad_con /= scalings
 
 	return grad_con
@@ -80,18 +84,17 @@ function generateRandomSamples(numSamples::Int64)
 end
 
 
-# project on to the set {x[1:n] >= 0, sum(x[1:n]) = 1, x[n+1] >= target}
-function projectOntoFeasibleSet(z::Array{Float64},target::Float64,proj_params::Array{Float64})
+# project on to the set {x[1:n] >= 0, sum(x[1:n]) = 1}
+function projectOntoSimplex(y_ref::Array{Float64})
 	
-	const n::Int64 = numVariables-1
-	y = deepcopy(z)
+	y = deepcopy(y_ref)
 	
 	v = Array{Float64}(1)
 	v[1] = y[1]
 	w = Array{Float64}(0)
 	rho::Float64 = y[1] - 1.0
 	
-	for j = 2:n
+	for j = 2:numVariables
 		if(y[j] > rho)
 			rho = rho + (y[j] - rho)/(size(v,1) + 1)
 			if(rho > y[j] - 1.0)
@@ -128,13 +131,159 @@ function projectOntoFeasibleSet(z::Array{Float64},target::Float64,proj_params::A
 	end
 	
 
-	x_proj = zeros(numVariables)
-	for j = 1:n
-		x_proj[j] = max(0,y[j] - rho)
+	y_proj = zeros(Float64,numVariables)
+	for j = 1:numVariables
+		y_proj[j] = max(0.0,y[j] - rho)
 	end
-	x_proj[numVariables] = max(target,z[numVariables])
 
-	return x_proj, proj_params
+	return y_proj
+end
+
+
+function solveInnerProblem(y_ref::Array{Float64,1},lambda::Float64,objectiveBound::Float64)
+	
+	y = deepcopy(y_ref)
+	
+	numerators = zeros(Float64,numVariables)
+	denominators = zeros(Float64,numVariables)
+	for j = 1:numVariables
+		numerators[j] = y[j]/(1.0+2*abs2(stdev[j])*lambda)
+		denominators[j] = 1.0/(1.0+2*abs2(stdev[j])*lambda)
+	end
+
+	v = Array{Float64}(1)
+	den_v = Array{Int64}(1)
+	v[1] = y[1]
+	den_v[1] = 1
+	w = Array{Float64}(0)
+	den_w = Array{Float64}(0)
+	nr::Float64 = numerators[1]
+	dr::Float64 = denominators[1]
+	rho::Float64 = (nr-1.0)/dr
+	
+	for j = 2:numVariables
+		if(y[j] > rho)
+			nr += numerators[j]
+			dr += denominators[j]
+			rho = (nr-1.0)/dr
+			if(rho > (numerators[j]-1.0)/denominators[j])
+				push!(v,y[j])
+				push!(den_v,j)
+			else
+				append!(w,v)
+				append!(den_w,den_v)
+				v = [y[j]]
+				den_v = [j]
+				nr = numerators[j]
+				dr = denominators[j]
+				rho = (nr-1.0)/dr
+			end
+		end
+	end
+	
+	if(size(w,1) > 0)
+		for j = 1:size(w,1)
+			if(w[j] > rho)
+				push!(v,w[j])
+				push!(den_v,den_w[j])
+				nr += numerators[den_w[j]]
+				dr += denominators[den_w[j]]
+				rho = (nr-1.0)/dr
+			end
+		end
+	end
+	
+	numDeleted::Int64 = 1
+	
+	while(numDeleted > 0)
+		initialCard::Int64 = size(v,1)
+		numDeleted = 0
+		for j = 1:initialCard
+			if(v[j-numDeleted] <= rho)
+				nr -= numerators[den_v[j-numDeleted]]
+				dr -= denominators[den_v[j-numDeleted]]
+				rho = (nr-1.0)/dr
+				deleteat!(v,j-numDeleted)
+				deleteat!(den_v,j-numDeleted)
+				numDeleted += 1
+			end
+		end
+	end
+	
+
+	y_proj = zeros(numVariables)
+	for j = 1:numVariables
+		y_proj[j] = max(0.0, (y_ref[j] - rho)/(1.0 + 2*abs2(stdev[j])*lambda))
+	end
+
+	residual::Float64 = norm(sigma*y_proj) - sqrt(objectiveBound)
+
+	return rho, residual
+end
+
+
+function projectOntoFeasibleSet(y_ref::Array{Float64},objectiveBound::Float64,proj_params::Array{Float64})
+
+	y_test = projectOntoSimplex(y_ref)
+	lambda::Float64 = 0.0
+	residual_test::Float64 = norm(sigma*y_test) - sqrt(objectiveBound)
+	if(residual_test <= 0.0)
+		return y_test, proj_params
+	end
+
+	lambda_tol::Float64 = 1E-08
+	lambda_low::Float64 = proj_params[1]
+	lambda_up::Float64 = proj_params[2]
+	residual_tol::Float64 = 1E-09
+	~, residual_up::Float64 = solveInnerProblem(y_ref,lambda_up,objectiveBound)
+	~, residual_low::Float64 = solveInnerProblem(y_ref,lambda_low,objectiveBound)
+	while(residual_up > 0.0 || residual_low < 0.0)
+		if(residual_up > 0.0)
+			lambda_low = lambda_up
+			lambda_up *= 2.0
+			~, residual_up = solveInnerProblem(y_ref,lambda_up,objectiveBound)
+		else
+			lambda_up = lambda_low
+			lambda_low /= 2.0
+			~, residual_low = solveInnerProblem(y_ref,lambda_low,objectiveBound)
+		end
+	end
+	
+	while(lambda_up - lambda_low > lambda_tol*lambda_up)
+		lambda = (lambda_low + lambda_up)/2.0
+		~, residual::Float64 = solveInnerProblem(y_ref,lambda,objectiveBound)
+		if(abs(residual) <= residual_tol)
+			break
+		elseif(residual > 0.0)
+			lambda_low = lambda
+		else
+			lambda_up = lambda
+		end
+	end
+	
+	mu::Float64, ~ = solveInnerProblem(y_ref,lambda,objectiveBound)
+	y_proj = zeros(Float64,numVariables)
+	for j = 1:numVariables
+		y_proj[j] = max(0.0, (y_ref[j]-mu)/(1.0+2*abs2(stdev[j])*lambda))
+	end
+	
+	err_net::Float64 = max(maximum(-y_proj),abs(sum(y_proj)-1),norm(sigma*y_proj)-sqrt(objectiveBound))
+	if(err_net > 1E-06)
+		println("WARNING! PROJECTION STEP MAY NOT BE ACCURATE!!!")
+	end
+	
+	if(proj_params[3] > 0.5)
+		if(lambda > lambda_tol)
+			lambda_factor::Float64 = sqrt(2.0)
+			proj_params[1] = lambda/lambda_factor
+			proj_params[2] = lambda*lambda_factor
+		else
+			proj_params[1] = 0.0
+			proj_params[2] = 1.0
+		end
+	end
+	
+	return y_proj, proj_params
 end
 
 
@@ -202,9 +351,7 @@ end
 
 
 # estimate Lipschitz constant of gradient of approximation
-function estimateCompositeLipschitzConstant(x_ref::Array{Float64},numSamplesForLipVarEst::Int64,numGradientSamples::Int64,batchSize::Int64,mu::Float64,tau::Float64,scalings::Float64,objectiveBound::Float64)
-	
-	proj_params = zeros(Float64,3)
+function estimateCompositeLipschitzConstant(x_ref::Array{Float64},numSamplesForLipVarEst::Int64,numGradientSamples::Int64,batchSize::Int64,mu::Float64,tau::Float64,scalings::Float64,objectiveBound::Float64,proj_params::Array{Float64})
 	
 	sample_radius::Float64 = norm(x_ref)/10.0
 	
@@ -247,11 +394,11 @@ function estimateStepLength(x_ref::Array{Float64},numGradientSamples::Int64,
 							scalings::Float64,objectiveBound::Float64)
 	
 	proj_params = zeros(Float64,3)
+	proj_params[2] = 1.0
 	
 	sample_radius::Float64 = norm(x_ref)/10.0
 	
-	rho_est::Float64 = estimateCompositeLipschitzConstant(x_ref,numSamplesForLipVarEst,numGradientSamples,batchSize,mu,tau,scalings,objectiveBound)
-	
+	rho_est::Float64 = estimateCompositeLipschitzConstant(x_ref,numSamplesForLipVarEst,numGradientSamples,batchSize,mu,tau,scalings,objectiveBound,proj_params)
 	
 	variance_est::Float64 = 0.0
 	for samp = 1:numSamplesForLipVarEst

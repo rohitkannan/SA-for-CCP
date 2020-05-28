@@ -235,7 +235,7 @@ end
 
 
 # project the current iterate onto the feasible set
-function projectOntoFeasibleSet(x_curr::Array{Float64},objectiveBound::Float64)
+function projectOntoFeasibleSet(x_curr::Array{Float64},objectiveBound::Float64,proj_params::Array{Float64})
 
 	mod = Model(solver=GurobiSolver(gurobi_env,Presolve=0,OutputFlag=0))
 
@@ -247,7 +247,7 @@ function projectOntoFeasibleSet(x_curr::Array{Float64},objectiveBound::Float64)
 	solve(mod)	
 	x_proj = getvalue(y)
 	
-	return x_proj	
+	return x_proj, proj_params
 end
 
 
@@ -305,6 +305,8 @@ end
 # estimate weak convexity parameter of the approximation
 function estimateConstraintLipschitzConstant(x_ref::Array{Float64},numSamplesForLipVarEst::Int64,numGradientSamples::Int64,batchSize::Int64,mu::Float64,tau::Float64,scalings::Float64,objectiveBound::Float64)
 	
+	proj_params = zeros(Float64,3)
+	
 	lambda, rho = generateRandomSamples(batchSize)
 	
 	sample_radius::Float64 = norm(x_ref)/10.0
@@ -319,10 +321,10 @@ function estimateConstraintLipschitzConstant(x_ref::Array{Float64},numSamplesFor
 		L_max_xi::Float64 = 0.0
 		for iter = 1:numSamplesForLipVarEst
 			x_1 = pickPointOnSphere(x_ref,sample_radius)
-			x_1 = projectOntoFeasibleSet(x_1,objectiveBound)
+			x_1,~ = projectOntoFeasibleSet(x_1,objectiveBound,proj_params)
 			
 			x_2 = pickPointOnSphere(x_ref,sample_radius)
-			x_2 = projectOntoFeasibleSet(x_2,objectiveBound)
+			x_2,~ = projectOntoFeasibleSet(x_2,objectiveBound,proj_params)
 		
 			grad_1 = getConstraintStochasticGradient(x_1,lambda[:,xi_start:xi_end],rho[:,xi_start:xi_end],mu,tau,scalings)
 			grad_2 = getConstraintStochasticGradient(x_2,lambda[:,xi_start:xi_end],rho[:,xi_start:xi_end],mu,tau,scalings)
@@ -346,6 +348,8 @@ function estimateStepLength(x_ref::Array{Float64},numGradientSamples::Int64,numS
 							batchSize::Int64,maxNumIterations::Int64,minNumReplicates::Int64,mu::Float64,tau::Float64,
 							scalings::Float64,objectiveBound::Float64)
 	
+	proj_params = zeros(Float64,3)
+	
 	sample_radius::Float64 = norm(x_ref)/10.0
 
 	grad_phi_up::Float64 = tau/4.0
@@ -355,7 +359,7 @@ function estimateStepLength(x_ref::Array{Float64},numGradientSamples::Int64,numS
 	variance_avg::Float64 = 0.0
 	for iter = 1:numSamplesForLipVarEst
 		x_1 = pickPointOnSphere(x_ref,sample_radius)
-		x_1 = projectOntoFeasibleSet(x_1,objectiveBound)
+		x_1,~ = projectOntoFeasibleSet(x_1,objectiveBound,proj_params)
 	
 		lambda, rho = generateRandomSamples(numGradientSamples*batchSize)
 
