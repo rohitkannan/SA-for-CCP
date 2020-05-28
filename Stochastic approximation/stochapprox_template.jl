@@ -50,7 +50,6 @@ const maxNumReplicates = 50
 
 # improvement requirement for considering another replicate
 const impReqForTerm = 1E-04
-const impReqForIncrStepSize = 1E-02
 const impReqForDecrStepSize = 1E-01
 const termCheckPeriod = 5
 
@@ -84,6 +83,14 @@ println("")
 
 for trial = 1:numTrials
 
+
+println("=======================")
+println("=======================")
+println("Trial ",trial,"/",numTrials)
+println("=======================")
+println("=======================")
+
+
 # get total time
 tic()
 
@@ -94,8 +101,11 @@ tic()
 user_risk_level::Float64 = computeRiskLevel(user_initial_guess)
 println("user_risk_level: ",round.(user_risk_level,riskLevelPrecision))
 
+proj_params = ones(Float64,3)
+proj_params[1] = 0.0
+
 # project initial guess onto feasible set
-initial_guess = projectOntoFeasibleSet(user_initial_guess,initialObjValue)
+initial_guess,~ = projectOntoFeasibleSet(user_initial_guess,initialObjValue,proj_params)
 
 # initial estimate of constraint scalings
 scalings = estimateScalings(initial_guess,numSamplesForScaling)
@@ -160,7 +170,6 @@ if(storeResults)
 		write(f,"tau: $tau \n")
 		write(f,"warm start replicate solution?: $usePrevSolnInOptLoop \n")
 		write(f,"improvement requirement for termination: $impReqForTerm \n")
-		write(f,"improvement requirement for increasing stepLength: $impReqForIncrStepSize \n")
 		write(f,"non-improvement requirement for decreasing stepLength: $impReqForDecrStepSize \n")
 		write(f,"number of samples for scaling: $numSamplesForScaling \n")
 		write(f,"scale at each iteration?: $scaleAtEachIter \n")
@@ -251,7 +260,6 @@ while true
 	objTime::Float64 = 0
 	otherTime::Float64 = 0
 
-
 for iter_t = 1:size(tau,1) # loop over the smoothing parameter values
 
 	println("")
@@ -259,7 +267,7 @@ for iter_t = 1:size(tau,1) # loop over the smoothing parameter values
 	println("")
 
 	#*========= INITIAL GUESS ==========
-	initial_guess = projectOntoFeasibleSet(initial_guess,currentObjBound)
+	initial_guess, proj_params = projectOntoFeasibleSet(initial_guess,currentObjBound,proj_params)
 	#*==================================
 
 	
@@ -374,7 +382,7 @@ for iter_t = 1:size(tau,1) # loop over the smoothing parameter values
 			tic()
 			
 			#*==== PROJECTION STEP =====
-			x = projectOntoFeasibleSet(x,currentObjBound)
+			x, proj_params = projectOntoFeasibleSet(x,currentObjBound,proj_params)
 			#*==========================
 		
 			iterProjTime += toq()
@@ -467,17 +475,14 @@ for iter_t = 1:size(tau,1) # loop over the smoothing parameter values
 			end
 			
 			localImpReq1::Float64 = impReqForTerm*local_best_risk_level2
-			localImpReq2::Float64 = impReqForIncrStepSize*local_best_risk_level2
-			localImpReq3::Float64 = impReqForDecrStepSize*local_best_risk_level2
+			localImpReq2::Float64 = impReqForDecrStepSize*local_best_risk_level2
 			
 			max_improvement = maximum(improvements)
 			
 			if(max_improvement > -localImpReq1)
-				if(max_improvement < localImpReq2)
-					stepLength[iter_t] *= stepLengthIncrFactor
-					numStepSizeIncr += 1
-				end
-			elseif(max_improvement < -localImpReq3)
+				stepLength[iter_t] *= stepLengthIncrFactor
+				numStepSizeIncr += 1
+			elseif(max_improvement < -localImpReq2)
 				stepLength[iter_t] /= stepLengthDecrFactor
 				numStepSizeDecr += 1
 			end
